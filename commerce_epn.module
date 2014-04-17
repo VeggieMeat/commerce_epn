@@ -1,0 +1,411 @@
+<?php
+
+/**
+ * Implements hook_libraries_info().
+ */
+function commerce_epn_libraries_info() {
+  $libraries['php-epn'] = array(
+    'name' => 'PHP-EPN',
+    'vendor url' => 'https://github.com/VMdoh/php-epn',
+    'download url' => 'https://github.com/VMdoh/php-epn/archive/master.tar.gz',
+    'version' => 'dev',
+    'files' => array(
+      'php' => array(
+        'lib/php-epn.php',
+      ),
+    ),
+  );
+
+  return $libraries;
+}
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_epn_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $payment_methods['commerce_epn'] = array(
+    'base' => 'commerce_epn',
+    'title' => t('eProcessing Network - Credit Card'),
+    'short_title' => t('ePN - CC'),
+    'display_title' => t('Credit Card (Visa, Mastercard, American Express, Discover)'),
+    'description' => t('Integrates eProcessing Network and TaxCloud for processing CC transactions.'),
+  );
+
+  return $payment_methods;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_epn_menu() {
+  $items = array();
+
+  // Add a menu item for capturing authorizations.
+  $items['admin/commerce/orders/%commerce_order/payment/%commerce_payment_transaction/epn-capture'] = array(
+    'title' => 'Capture',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_epn_capture_form', 3, 5),
+    'access callback' => 'commerce_epn_capture_access',
+    'access arguments' => array(3, 5),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'context' => MENU_CONTEXT_INLINE,
+    'weight' => 2,
+    'file' => 'includes/commerce_epn.admin.inc',
+  );
+
+  // Add a menu item for voiding transactions.
+  $items['admin/commerce/orders/%commerce_order/payment/%commerce_payment_transaction/epn-void'] = array(
+    'title' => 'Void',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_epn_void_form', 3, 5),
+    'access callback' => 'commerce_epn_void_access',
+    'access arguments' => array(3, 5),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'context' => MENU_CONTEXT_INLINE,
+    'weight' => 2,
+    'file' => 'includes/commerce_epn.admin.inc',
+  );
+
+  // Add a menu item for processing returns.
+  $items['admin/commerce/orders/%commerce_order/payment/%commerce_payment_transaction/epn-return'] = array(
+    'title' => 'Return',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_epn_return_form', 3, 5),
+    'access callback' => 'commerce_epn_return_access',
+    'access arguments' => array(3, 5),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'context' => MENU_CONTEXT_INLINE,
+    'weight' => 2,
+    'file' => 'includes/commerce_epn.admin.inc',
+  );
+
+  // Add a menu item for removing an authorization.
+  $items['admin/commerce/orders/%commerce_order/payment/%commerce_payment_transaction/epn-deauthorize'] = array(
+    'title' => 'Deauthorize',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_epn_deauthorize_form', 3, 5),
+    'access callback' => 'commerce_epn_deauthorize_access',
+    'access arguments' => array(3, 5),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'context' => MENU_CONTEXT_INLINE,
+    'weight' => 2,
+    'file' => 'includes/commerce_epn.admin.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * Returns the default settings for the eProcessing Network payment method.
+ */
+function commerce_epn_default_settings() {
+  return array(
+    'account' => '',
+    'key' => '',
+    'trans_mode' => COMMERCE_EPN_TRANS_MODE_TEST,
+    'trans_type' => COMMERCE_CREDIT_AUTH_CAPTURE,
+  );
+}
+
+/**
+ * Determines access to the prior authorization capture form for eProcessing
+ *   Network credit card transactions.
+ *
+ * @param $order
+ *   The order the transaction is on.
+ * @param $transaction
+ *   The payment transaction object to be captured.
+ *
+ * @return bool
+ */
+function commerce_epn_capture_access($order, $transaction) {
+  // Return FALSE if the transaction isn't for eProcessing Network or isn't
+  // awaiting capture.
+  if ($transaction->payment_method != 'commerce_epn' || empty($transaction->remote_id) || strtoupper($transaction->remote_status) != 'AUTH_ONLY') {
+    return FALSE;
+  }
+
+  // Return FALSE if it is more than
+}
+
+/**
+ * Payment method callback: settings form.
+ */
+function commerce_epn_settings_form($settings = NULL) {
+  module_load_include('inc', 'commerce_payment', 'includes/commerce_payment.credit_card');
+
+  // Merge the default settings into the stored settings array.
+  $settings = (array) $settings + commerce_epn_default_settings();
+
+  $form = array();
+
+  $form['account'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Account number'),
+    '#description' => t('The account number that you use to manage your eProcessing Network account.'),
+    '#default_value' => $settings['account'],
+    '#required' => TRUE,
+  );
+  $form['key'] = array(
+    '#type' => 'textfield',
+    '#title' => t('RestrictKey'),
+    '#description' => t('The RestrictKey for your account. This is not your password.'),
+    '#default_value' => $settings['key'],
+    '#required' => TRUE,
+  );
+  $form['trans_mode'] = array(
+    '#type' => 'radios',
+    '#title' => t('Transaction mode'),
+    '#description' => t('Change to "live" when you are ready to start processing real transactions. The "test" mode overrides your credentials with the 080880 test account.'),
+    '#options' => array(
+      COMMERCE_EPN_TRANS_MODE_LIVE => t('Live transactions'),
+      COMMERCE_EPN_TRANS_MODE_TEST => t('Test transations'),
+    ),
+    '$default_value' => $settings['trans_mode'],
+  );
+  $form['trans_type'] = array(
+    '#type' => 'radios',
+    '#title' => t('Default credit card transaction type'),
+    '#description' => t('The default will be used to process transactions during checkout.'),
+    '#options' => array(
+      COMMERCE_CREDIT_AUTH_CAPTURE => t('Authorization and capture'),
+      COMMERCE_CREDIT_AUTH_ONLY => t('Authorization only (requires manual or automated capture after checkout)'),
+    ),
+    '#default_value' => $settings['txn_type'],
+  );
+  $form['card_types'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Limit accepted credit cards to the following types'),
+    '#description' => t('If you want to limit acceptable card types, you should only select those supported by your merchant account.') . '<br />' . t('If none are checked, any credit card type will be accepted.'),
+    '#options' => commerce_payment_credit_card_types(),
+    '#default_value' => $settings['card_types'],
+  );
+  $form['log'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Log the following messages for debugging'),
+    '#options' => array(
+      'request' => t('API request messages'),
+      'response' => t('API response messages'),
+    ),
+    '#default_value' => $settings['log'],
+  );
+
+  return $form;
+}
+
+/**
+ * Payment method callback: checkout form.
+ */
+function commerce_epn_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  module_load_include('inc', 'commerce_payment', 'includes/commerce_payment.credit_card');
+
+  // Prepare the fields to include on the credit card form.
+  $fields = array(
+    'code' => '',
+  );
+
+  // Add the credit card types array if necessary.
+  if (isset($payment_method['settings']['card_types'])) {
+    $card_types = array_diff(array_values($payment_method['settings']['card_types']), array(0));
+
+    if (!empty($card_types)) {
+      $fields['type'] = $card_types;
+    }
+  }
+
+  return commerce_payment_credit_card_form($fields);
+}
+
+/**
+ * Payment method callback: checkout form validation.
+ */
+function commerce_epn_submit_form_validate($payment_method, $pane_form, $pane_values, $order, $form_parents = array()) {
+  module_load_include('inc', 'commerce_payment', 'includes/commerce_payment.credit_card');
+
+  // Validate the credit card fields.
+  $settings = array(
+    'form_parents' => array_merge($form_parents, array('credit_card')),
+  );
+
+  if (!commerce_payment_credit_card_validate($pane_values['credit_card'], $settings)) {
+    return FALSE;
+  }
+}
+
+/**
+ * Payment method callback: checkout form submission.
+ */
+function commerce_epn_submit_form_submit($payment_method, $pane_form, $pane_values, $order, $charge) {
+  // Determine the credit card type if possible for use in later code.
+  if (!empty($pane_values['credit_card']['number'])) {
+    module_load_include('inc', 'commerce_payment', 'includes/commerce_payment.credit_card');
+    $card_type = commerce_payment_validate_credit_card_type($pane_values['credit_card']['number'], array_keys(commerce_payment_credit_card_types()));
+  }
+
+  // If the charge amount is 0...
+  if ($charge['amount'] == 0) {
+    // Prevent the transaction except under limited circumstances.
+    $prevent_transaction = TRUE;
+
+    // Allow 0 amount authorizations on Visa cards.
+    if ($payment_method['settings']['txn_type'] == COMMERCE_CREDIT_AUTH_ONLY && $card_type == 'visa') {
+      $prevent_transaction = FALSE;
+    }
+
+    // If the transaction should still be prevented...
+    if ($prevent_transaction) {
+      // Create a transaction to log the skipped transaction and display ai
+      // helpful message to the customer.
+      $transaction = commerce_payment_transaction_new('commerce_epn', $order->order_id);
+      $transaction->amount = $charge['amount'];
+      $transaction->currency_code = $charge['currency_code'];
+      $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+      $transaction->message = t('Invalid @amount transaction not attempted.', array('@amount' => commerce_currency_format($charge['amount'], $charge['currency_code'])));
+      commerce_payment_transaction_save($transaction);
+
+      drupal_set_message(t('We encountered an error processing your transaction. Please contact us to resolve the issue.'), 'error');
+      return FALSE;
+    }
+  }
+
+  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+  // Get the default transaction type from the payment method settings.
+  $trans_type = $payment_method['settings']['trans_type'];
+
+  // Prepare the billing address for use in the request.
+  if (isset($order->commerce_customer_billing) && $order_wrapper->commerce_customer_billing->value()){
+    $billing_address = $order_wrapper->commerce_customer_billing->commerce_customer_address->value();
+
+    if (empty($billing_address['first_name'])) {
+      $name_parts = explode(' ', $billing_address['name_line']);
+      $billing_address['first_name'] = array_shift($name_parts);
+      $billing_address['last_name'] = implode(' ', $name_parts);
+    }
+
+    $address = substr($billing_address['thoroughfare'], 0, 60);
+    $zip = substr($billing_address['postal_code'], 0, 20);
+  }
+  else {
+    drupal_set_message(t('A billing address is required to process this transaction.'), 'error');
+    return FALSE;
+  }
+
+  if (commerce_epn_loaded()) {
+    $amount = number_format(commerce_currency_amount_to_decimal($charge['amount'], $charge['currency_code']), 2, '.', '');
+    $epn = new \EPN\Transaction\CardNotPresent(
+      $payment_method['settings']['account'],
+      $payment_method['settings']['key'],
+      $pane_values['credit_card']['number'],
+      $pane_values['credit_card']['exp_month'],
+      $pane_values['credit_card']['exp_year'],
+      $amount,
+      $address,
+      $zip,
+      COMMERCE_EPN_USE_CVV2,
+      $pane_values['credit_card']['code']
+    );
+
+    $epn->setTranType($trans_type);
+    $epn->setInv($order->order_id);
+    $epn->setFirstName($billing_address['first_name']);
+    $epn->setLastName($billing_address['last_name']);
+    $epn->setCity($billing_address['locality']);
+    $epn->setState($billing_address['administrative_area']);
+
+    // Submit the transaction.
+    $response = $epn->execute();
+
+    $data = $response->getResponse();
+
+    $transaction = commerce_payment_transaction_new('commerce_epn', $order->order_id);
+    $transaction->instance_id = $payment_method['instance_id'];
+    $transaction->remote_id = $data['TransactionID'];
+    $transaction->message = $response->getTransationMessage();
+    $transaction->amount = $charge['amount'];
+    $transaction->currency_code = $charge['currency_code'];
+    $transaction->payload[REQUEST_TIME] = $response;
+
+     // Anything besides a SUCCESS should be deemed failure at this point.
+    if ($response->getTransactionResponse() != 'Y') {
+      $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+      drupal_set_message(t('We received the following error processing your card. Please enter your information again or try a different card. Error Message: !message', array('!message' => $response->getTransactionMessage())), 'error');
+
+      switch ($response->getAVSCode()) {
+        case 'A':
+        case 'E':
+        case 'N':
+        case 'R':
+        case 'W':
+        case 'Z':
+        case 'G':
+        case 'B':
+        case 'C':
+        case 'D':
+        case 'I':
+        case 'M':
+          $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+          drupal_set_message(t('We received the following Address Verification error processing your card. Please enter your information again or try a different card. Error Message: !message', array('!message' => $response->getAVSMessage())), 'error');
+      }
+
+      // Check CVV2 and fail where necessary
+      switch ($response->getCVV2Code()) {
+        case 'N':
+        case 'S':
+          $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+          drupal_set_message(t('We received the following CVV2 error processing your card. Please enter your information again or try a different card. Error Message: !message', array('!message' => $response->getCVV2Message())), 'error');
+      }
+
+      commerce_payment_transaction_save($transaction);
+      return FALSE;
+    }
+
+    switch ($response->getAVSCode()) {
+      case 'A':
+      case 'E':
+      case 'N':
+      case 'R':
+      case 'W':
+      case 'Z':
+      case 'G':
+      case 'B':
+      case 'C':
+      case 'D':
+      case 'I':
+      case 'M':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+        drupal_set_message(t('We received the following Address Verification error processing your card. Please enter your information again or try a different card. Error Message: !message', array('!message' => $response->getAVSMessage())), 'error');
+        commerce_payment_transaction_save($transaction);
+        return FALSE;
+    }
+
+    // Check CVV2 and fail where necessary
+    switch ($response->getCVV2Code()) {
+      case 'N':
+      case 'S':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+        drupal_set_message(t('We received the following CVV2 error processing your card. Please enter your information again or try a different card. Error Message: !message', array('!message' => $response->getCVV2Message())), 'error');
+        commerce_payment_transaction_save($transaction);
+        return FALSE;
+    }
+
+    switch ($trans_type) {
+      case COMMERCE_CREDIT_AUTH_ONLY:
+        $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+        break;
+
+      case COMMERCE_CREDIT_AUTH_CAPTURE:
+        $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+        break;
+
+      case COMMERCE_CREDIT_CAPTURE_ONLY:
+        $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+        break;
+    }
+
+    $transaction->remote_status = $response->getTransactionMessage();
+    commerce_payment_transaction_save($transaction);
+  }
+}

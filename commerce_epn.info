@@ -1,0 +1,3 @@
+name = Commerce eProcessing Network
+description = Enable Drupal Commerce to use eProcessing Network for payments.
+core = 7.x
